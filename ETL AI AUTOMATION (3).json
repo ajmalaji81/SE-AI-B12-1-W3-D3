@@ -1,0 +1,324 @@
+{
+  "name": "ETL AI AUTOMATION",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "File upload",
+        "formDescription": "Upload the student data ",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "File upload",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "id": "c012cb22-cfef-4caa-b2c4-ac707ec64d19",
+      "name": "CSV Upload",
+      "webhookId": "dd51526b-fd65-4260-a960-320993ba112f"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "File_upload",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "0af5ddbc-1494-441a-9b1e-973e9f0efa54",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Clean this student enrollment row and return ONLY a JSON object\n\nRow data :{{ JSON.stringify($json) }}\n\nRules: \n- Name : Title case (Manoj K)\n- Email : if invalid set Invaid_Email\n- Phone: if less than 10 digits set missing\n- Course: only python or machine learning or Data Science.\n- Fee_paid: yes/YES = true, no/NO = false\n- City: Title Case, empty = UNKNOWN\n- Enrolled_Date: convert to YYYY-MM-DD\n\nReturn ONLY raw JSON, No explanation. No markdown\n",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        432,
+        0
+      ],
+      "id": "17620611-e670-47fa-89e0-2c7652311a48",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        384,
+        208
+      ],
+      "id": "74c11c33-710d-4e50-911d-11a1d6f1ffeb",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "Upcy0rcMWNj8JCOh",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ensure we handle incoming items regardless of whether the output is a raw string or an object\nconst cleanedItems = [];\n\n// Simple regex helpers\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nconst phoneDigitsRegex = /\\D/g; // to strip non-numeric characters\n\nfor (const item of $input.all()) {\n  let rawData = item.json;\n\n  // 1. If AI output is wrapped in a string (e.g., raw text or inside a property like 'text', 'output', etc.)\n  if (typeof rawData === 'string') {\n    try {\n      // Remove possible markdown code block fences (```json ... ```)\n      const sanitized = rawData.replace(/```json/gi, '').replace(/```/g, '').trim();\n      rawData = JSON.parse(sanitized);\n    } catch (e) {\n      cleanedItems.push({\n        json: {\n          error: \"Failed to parse JSON string\",\n          raw: rawData\n        }\n      });\n      continue;\n    }\n  } else if (rawData.text && typeof rawData.text === 'string') {\n    // If output is nested under a 'text' property from an LLM node\n    try {\n      const sanitized = rawData.text.replace(/```json/gi, '').replace(/```/g, '').trim();\n      rawData = JSON.parse(sanitized);\n    } catch (e) {\n      // Keep rawData as is if not a JSON string\n    }\n  }\n\n  // If the parsed result is an array of items, normalize to loop through them\n  const records = Array.isArray(rawData) ? rawData : [rawData];\n\n  for (const record of records) {\n    // Extract & trim fields safely\n    const studentId = (record.Student_ID || record.student_id || '').toString().trim();\n    const name = (record.Name || record.name || '').toString().trim();\n    const rawEmail = (record.Email || record.email || '').toString().trim().toLowerCase();\n    const rawPhone = (record.Phone || record.phone || '').toString().trim();\n    const course = (record.Course || record.course || '').toString().trim();\n    const feePaid = Boolean(record.Fee_Paid ?? record.fee_paid);\n    const city = (record.City || record.city || '').toString().trim();\n    const enrolledDate = (record.Enrolled_Date || record.enrolled_date || '').toString().trim();\n\n    // 2. Validate Email\n    const isEmailValid = emailRegex.test(rawEmail);\n    const cleanEmail = isEmailValid ? rawEmail : null;\n\n    // 3. Clean & Validate Phone (strips spaces, dashes, symbols)\n    const digitsOnlyPhone = rawPhone.replace(phoneDigitsRegex, '');\n    const isPhoneValid = digitsOnlyPhone.length >= 10 && digitsOnlyPhone.length <= 15;\n\n    // 4. Format/Capitalize strings\n    const formattedCourse = course\n      ? course.charAt(0).toUpperCase() + course.slice(1).toLowerCase()\n      : '';\n    const formattedCity = city\n      ? city.charAt(0).toUpperCase() + city.slice(1).toLowerCase()\n      : '';\n\n    // 5. Structure clean object\n    cleanedItems.push({\n      json: {\n        student_id: studentId,\n        name: name,\n        email: cleanEmail,\n        is_email_valid: isEmailValid,\n        phone: digitsOnlyPhone || null,\n        is_phone_valid: isPhoneValid,\n        course: formattedCourse,\n        fee_paid: feePaid,\n        city: formattedCity,\n        enrolled_date: enrolledDate || null,\n        has_errors: !isEmailValid || !isPhoneValid\n      }\n    });\n  }\n}\n\nreturn cleanedItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        32
+      ],
+      "id": "1ded33a2-255e-4d1a-95d8-d188151300de",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "fc050c96-1e4b-4d0e-ac36-87651a407c26",
+              "leftValue": "={{ $json.city }}",
+              "rightValue": "/[cC]hennai/",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            },
+            {
+              "id": "d4a92399-5fe3-4965-8296-e01fbf22352f",
+              "leftValue": "={{ $json.is_email_valid }}",
+              "rightValue": "={{ $json.is_email_valid }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": "={{  }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1552,
+        -432
+      ],
+      "id": "ec8c6e9a-5159-4aae-91e3-306367fb795c",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "fileName": "chennai_emailed_user.xlsx"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        -64
+      ],
+      "id": "86d4d3a9-bbf0-4913-86a9-b0e62ac5c00b",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        784,
+        16
+      ],
+      "id": "423abbe1-0bd9-4a74-8c6b-d4b8dfd0f066",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "student_id",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -432
+      ],
+      "id": "df323a22-c01f-4bee-9b26-0509fa847571",
+      "name": "Remove Duplicates"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "item.json.name = item.json.name ? item.json.name.trim() : '';\nitem.json.email = item.json.email ? item.json.email.trim().toLowerCase() : null;\n\nreturn item;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -432
+      ],
+      "id": "00b8914a-c8be-4948-b05a-e68186cd2d5f",
+      "name": "Code in JavaScript1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "CSV Upload": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "fa9861ce-258f-49bd-a92f-d4dd4c5af588",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d2db3f6fcc3b0227e453d88db7b1553a645df4a3771c5292607eeea917279274"
+  },
+  "nodeGroups": [],
+  "id": "JzK7HVgAkrePteQ7",
+  "tags": []
+}
